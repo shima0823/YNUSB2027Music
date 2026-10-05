@@ -69,10 +69,15 @@ function App() {
 
   const handleComplete = async (collectionName, taskId) => {
     if (window.confirm('これを完了（非表示）にしますか？')) {
-      const taskRef = doc(db, collectionName, taskId);
-      await updateDoc(taskRef, {
-        completed: true
-      });
+      try {
+        const taskRef = doc(db, collectionName, taskId);
+        await updateDoc(taskRef, {
+          completed: true
+        });
+      } catch (error) {
+        console.error("Firestore Update Error:", error);
+        alert(`エラーが発生しました: ${error.message}\nFirestoreのセキュリティルールを確認してください。`);
+      }
     }
   };
 
