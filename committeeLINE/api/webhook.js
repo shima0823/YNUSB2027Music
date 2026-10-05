@@ -104,7 +104,7 @@ ${text}
     res.status(200).send('OK');
   } catch (error) {
     console.error(error);
-    res.status(500).send('Error');
+    res.status(500).json({ error: error.message, stack: error.stack, env: !!process.env.GEMINI_API_KEY });
   }
 }
 
