@@ -12,31 +12,33 @@ function App() {
   const [showPinInput, setShowPinInput] = useState(false);
 
   useEffect(() => {
-    // 完了していないTo-Doを取得
-    const qTodo = query(
-      collection(db, 'todos'),
-      where('completed', '==', false),
-      orderBy('createdAt', 'asc')
-    );
+    const getDate = (val) => val?.toDate ? val.toDate() : new Date(val || 0);
+
+    // To-Doを取得してクライアント側でフィルタ＆ソート（複合インデックス不要化）
+    const qTodo = query(collection(db, 'todos'));
     const unsubTodo = onSnapshot(qTodo, (snapshot) => {
-      const todosData = [];
+      let todosData = [];
       snapshot.forEach((doc) => {
         todosData.push({ id: doc.id, ...doc.data() });
       });
+      // フィルタリングとソート
+      todosData = todosData
+        .filter(task => task.completed === false)
+        .sort((a, b) => getDate(a.createdAt) - getDate(b.createdAt));
       setTodoList(todosData);
     });
 
-    // 完了していない求人を取得
-    const qJob = query(
-      collection(db, 'jobs'),
-      where('completed', '==', false),
-      orderBy('createdAt', 'asc')
-    );
+    // 求人を取得してクライアント側でフィルタ＆ソート
+    const qJob = query(collection(db, 'jobs'));
     const unsubJob = onSnapshot(qJob, (snapshot) => {
-      const jobsData = [];
+      let jobsData = [];
       snapshot.forEach((doc) => {
         jobsData.push({ id: doc.id, ...doc.data() });
       });
+      // フィルタリングとソート
+      jobsData = jobsData
+        .filter(job => job.completed === false)
+        .sort((a, b) => getDate(a.createdAt) - getDate(b.createdAt));
       setJobList(jobsData);
     });
 
