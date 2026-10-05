@@ -213,24 +213,13 @@ function App() {
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
-            <a href="#" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
+            <a href="https://ryosukeshima0823.github.io/YNUSB2026Music/" target="_blank" rel="noreferrer" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
               <div className="bg-purple-100 p-2 rounded-lg text-purple-600 mr-4">
                 <Music className="w-5 h-5" />
               </div>
               <div className="flex-1">
                 <p className="font-bold text-slate-800 text-sm">音委リフレクション</p>
                 <p className="text-xs text-slate-500">練習の振り返り用ウェブアプリ</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-300" />
-            </a>
-
-            <a href="#" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
-              <div className="bg-blue-100 p-2 rounded-lg text-blue-600 mr-4">
-                <Calendar className="w-5 h-5" />
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 text-sm">出欠管理スプレッドシート</p>
-                <p className="text-xs text-slate-500">基本の出欠入力はこちら</p>
               </div>
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </a>
