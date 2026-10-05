@@ -31,6 +31,12 @@ export default async function handler(req, res) {
 
     for (const event of events) {
       if (event.type !== 'message' || event.message.type !== 'text') continue;
+      
+      // LINEの再送キューに残っている古いメッセージの亡霊を完全に無視する
+      if (event.deliveryContext && event.deliveryContext.isRedelivery) {
+        console.log("Ignored redelivery:", event.message.id);
+        continue;
+      }
 
       const text = event.message.text;
       const isTodo = text.includes('!todo') || text.includes('！todo') || text.includes('!TODO');
