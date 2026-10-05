@@ -10,7 +10,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const events = req.body.events;
+    const body = req.body;
+    const events = body.events;
+    
+    // DEBUG: Save raw incoming webhook payload to a debug collection
+    await fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/debug_webhooks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: {
+          payload: { stringValue: JSON.stringify(body) },
+          createdAt: { timestampValue: new Date().toISOString() }
+        }
+      })
+    });
+
     if (!events || events.length === 0) {
       return res.status(200).send('OK');
     }
@@ -24,78 +38,41 @@ export default async function handler(req, res) {
 
       if (isTodo || isJob) {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-        
         let prompt, collectionName;
         
         if (isTodo) {
           collectionName = 'todos';
-          prompt = `
-以下のメッセージから、To-Do（やるべきこと）を抽出してください。
-以下のJSONフォーマットのみを返してください。
-
-{
-  "title": "タスクの短いタイトル",
-  "deadline": "提出期限（例: 10/15 23:59、今日中、など）",
-  "actionUrl": "メッセージ内にURLがあればそれ。なければ空文字",
-  "actionLabel": "リンクを開くボタンのラベル（例: フォームを開く、スプシを開く）",
-  "description": "タスクの簡単な説明（1行）",
-  "urgency": "high または medium または low"
-}
-
-メッセージ：
-${text}
-`;
+          prompt = `以下のメッセージからTo-Doを抽出してください。JSONのみ返却。\n{"title":"タイトル","deadline":"期限","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}\n\n${text}`;
         } else {
           collectionName = 'jobs';
-          prompt = `
-以下のメッセージから、求人・募集情報（募集している役職や役割）を抽出してください。
-以下のJSONフォーマットのみを返してください。
-
-{
-  "title": "募集している役職や役割の短いタイトル",
-  "deadline": "募集期限（例: 今週金曜まで、決まり次第終了、など）",
-  "actionUrl": "応募フォームなどのURLがあればそれ。なければ空文字",
-  "actionLabel": "リンクを開くボタンのラベル（例: 応募する、詳細を見る）",
-  "description": "仕事の概要やアピールポイント、条件など（1〜2行）",
-  "urgency": "high または medium または low"
-}
-
-メッセージ：
-${text}
-`;
+          prompt = `以下のメッセージから求人情報を抽出してください。JSONのみ返却。\n{"title":"タイトル","deadline":"期限","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}\n\n${text}`;
         }
 
         const response = await ai.models.generateContent({
           model: 'gemini-3.8-flash',
           contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-          }
+          config: { responseMimeType: "application/json" }
         });
 
         const extractedData = JSON.parse(response.text);
-
-        // Firestoreに保存 (messageIdをドキュメントIDにして重複作成を完全に防ぐ)
         const messageId = event.message.id || Date.now().toString();
         const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt`;
         
-        const firestoreDoc = {
-          fields: {
-            title: { stringValue: extractedData.title || "" },
-            deadline: { stringValue: extractedData.deadline || "" },
-            actionUrl: { stringValue: extractedData.actionUrl || "" },
-            actionLabel: { stringValue: extractedData.actionLabel || "" },
-            description: { stringValue: extractedData.description || "" },
-            urgency: { stringValue: extractedData.urgency || "medium" },
-            completed: { booleanValue: false },
-            createdAt: { timestampValue: new Date().toISOString() }
-          }
-        };
-
         await fetch(dbUrl, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(firestoreDoc)
+          body: JSON.stringify({
+            fields: {
+              title: { stringValue: extractedData.title || "" },
+              deadline: { stringValue: extractedData.deadline || "" },
+              actionUrl: { stringValue: extractedData.actionUrl || "" },
+              actionLabel: { stringValue: extractedData.actionLabel || "" },
+              description: { stringValue: extractedData.description || "" },
+              urgency: { stringValue: extractedData.urgency || "medium" },
+              completed: { booleanValue: false },
+              createdAt: { timestampValue: new Date().toISOString() }
+            }
+          })
         });
 
         const typeLabel = isTodo ? "To-Do" : "求人情報";
@@ -106,7 +83,7 @@ ${text}
     res.status(200).send('OK');
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: error.message, stack: error.stack, env: !!process.env.GEMINI_API_KEY });
+    res.status(500).json({ error: error.message });
   }
 }
 
