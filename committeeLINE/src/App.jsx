@@ -1,24 +1,24 @@
 import { useState, useEffect } from 'react'
-import { FileText, Calendar, CheckSquare, Music, Bell, ExternalLink, CheckCircle2, ChevronRight, ArrowRight, Lock, Unlock, Trash2 } from 'lucide-react'
+import { FileText, Calendar, CheckSquare, Music, Bell, ExternalLink, CheckCircle2, ChevronRight, ArrowRight, Lock, Unlock, Users } from 'lucide-react'
 import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'
 import { db } from './firebase'
 
 function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [todoList, setTodoList] = useState([]);
+  const [jobList, setJobList] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [pin, setPin] = useState('');
   const [showPinInput, setShowPinInput] = useState(false);
 
   useEffect(() => {
-    // 完了していないTo-Doを取得（古いものから順に）
-    const q = query(
+    // 完了していないTo-Doを取得
+    const qTodo = query(
       collection(db, 'todos'),
       where('completed', '==', false),
       orderBy('createdAt', 'asc')
     );
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubTodo = onSnapshot(qTodo, (snapshot) => {
       const todosData = [];
       snapshot.forEach((doc) => {
         todosData.push({ id: doc.id, ...doc.data() });
@@ -26,7 +26,24 @@ function App() {
       setTodoList(todosData);
     });
 
-    return () => unsubscribe();
+    // 完了していない求人を取得
+    const qJob = query(
+      collection(db, 'jobs'),
+      where('completed', '==', false),
+      orderBy('createdAt', 'asc')
+    );
+    const unsubJob = onSnapshot(qJob, (snapshot) => {
+      const jobsData = [];
+      snapshot.forEach((doc) => {
+        jobsData.push({ id: doc.id, ...doc.data() });
+      });
+      setJobList(jobsData);
+    });
+
+    return () => {
+      unsubTodo();
+      unsubJob();
+    };
   }, []);
 
   const handleAdminToggle = () => {
@@ -48,9 +65,9 @@ function App() {
     }
   };
 
-  const handleComplete = async (taskId) => {
-    if (window.confirm('このタスクを完了（非表示）にしますか？')) {
-      const taskRef = doc(db, 'todos', taskId);
+  const handleComplete = async (collectionName, taskId) => {
+    if (window.confirm('これを完了（非表示）にしますか？')) {
+      const taskRef = doc(db, collectionName, taskId);
       await updateDoc(taskRef, {
         completed: true
       });
@@ -92,7 +109,7 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 p-4 overflow-y-auto space-y-6">
         
-        {/* Feature 1: To-Doリスト */}
+        {/* To-Doリスト */}
         <section>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -117,7 +134,7 @@ function App() {
                         {task.deadline}
                       </span>
                       {isAdmin && (
-                        <button onClick={() => handleComplete(task.id)} className="p-1 text-slate-400 hover:text-emerald-600 transition">
+                        <button onClick={() => handleComplete('todos', task.id)} className="p-1 text-slate-400 hover:text-emerald-600 transition">
                           <CheckCircle2 className="w-5 h-5" />
                         </button>
                       )}
@@ -141,14 +158,70 @@ function App() {
           </div>
         </section>
 
-        {/* Feature 4: リンク集の一元化 */}
+        {/* 求人情報 */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-blue-600" />
+              <h2 className="text-gray-700 font-bold text-sm">求人・募集情報</h2>
+            </div>
+          </div>
+          
+          <div className="space-y-3">
+            {jobList.length === 0 ? (
+              <div className="bg-white p-6 rounded-xl border border-slate-200 text-center text-slate-500 text-sm">
+                現在募集中の役職はありません
+              </div>
+            ) : (
+              jobList.map(job => (
+                <div key={job.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50 rounded-bl-full -z-0"></div>
+                  <div className="flex justify-between items-start mb-2 relative z-10">
+                    <h3 className="font-bold text-blue-900 text-sm flex-1 mr-2">{job.title}</h3>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                        〆切: {job.deadline}
+                      </span>
+                      {isAdmin && (
+                        <button onClick={() => handleComplete('jobs', job.id)} className="p-1 text-slate-400 hover:text-blue-600 transition">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {job.description && <p className="text-xs text-slate-600 mb-3 relative z-10">{job.description}</p>}
+                  
+                  {job.actionUrl && (
+                    <a href={job.actionUrl} target="_blank" rel="noreferrer" className="flex items-center justify-center w-full py-2 px-4 rounded-lg text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white transition-colors relative z-10">
+                      {job.actionLabel || '詳細を見る・応募する'}
+                      <ArrowRight className="w-4 h-4 ml-1" />
+                    </a>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* クイックアクセスリンク集 */}
         <section>
           <div className="flex items-center gap-2 mb-3">
             <ExternalLink className="w-5 h-5 text-indigo-500" />
-            <h2 className="text-gray-700 font-bold text-sm">基本リンク集 (ノートは廃止！)</h2>
+            <h2 className="text-gray-700 font-bold text-sm">クイックアクセス (基本リンク集)</h2>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
+            <a href="#" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
+              <div className="bg-purple-100 p-2 rounded-lg text-purple-600 mr-4">
+                <Music className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <p className="font-bold text-slate-800 text-sm">音委リフレクション</p>
+                <p className="text-xs text-slate-500">練習の振り返り用ウェブアプリ</p>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-300" />
+            </a>
+
             <a href="#" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
               <div className="bg-blue-100 p-2 rounded-lg text-blue-600 mr-4">
                 <Calendar className="w-5 h-5" />
@@ -156,17 +229,6 @@ function App() {
               <div className="flex-1">
                 <p className="font-bold text-slate-800 text-sm">出欠管理スプレッドシート</p>
                 <p className="text-xs text-slate-500">基本の出欠入力はこちら</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-300" />
-            </a>
-
-            <a href="#" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
-              <div className="bg-purple-100 p-2 rounded-lg text-purple-600 mr-4">
-                <Music className="w-5 h-5" />
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 text-sm">音委リフレクション</p>
-                <p className="text-xs text-slate-500">練習の振り返りアプリ</p>
               </div>
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </a>

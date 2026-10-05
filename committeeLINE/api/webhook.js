@@ -18,26 +18,18 @@ export default async function handler(req, res) {
     for (const event of events) {
       if (event.type !== 'message' || event.message.type !== 'text') continue;
 
-      const sourceId = event.source.groupId || event.source.roomId || event.source.userId;
-      const text = event.message.text.trim();
+      const text = event.message.text;
+      const isTodo = text.includes('!todo') || text.includes('！todo') || text.includes('!TODO');
+      const isJob = text.includes('!求人') || text.includes('！求人');
 
-      if (text === '!todo') {
-        // 直前のメッセージをFirestoreから取得
-        const cacheUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/line_cache/${sourceId}`;
-        const cacheRes = await fetch(cacheUrl);
-        const cacheData = await cacheRes.json();
-
-        if (!cacheRes.ok || !cacheData.fields || !cacheData.fields.text) {
-          await replyLine(event.replyToken, '直前のメッセージが見つかりませんでした。');
-          continue;
-        }
-
-        const lastMessage = cacheData.fields.text.stringValue;
-
-        // Geminiで解析
+      if (isTodo || isJob) {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
         
-        const prompt = `
+        let prompt, collectionName;
+        
+        if (isTodo) {
+          collectionName = 'todos';
+          prompt = `
 以下のメッセージから、To-Do（やるべきこと）を抽出してください。
 以下のJSONフォーマットのみを返してください。
 
@@ -51,8 +43,27 @@ export default async function handler(req, res) {
 }
 
 メッセージ：
-${lastMessage}
+${text}
 `;
+        } else {
+          collectionName = 'jobs';
+          prompt = `
+以下のメッセージから、求人・募集情報（募集している役職や役割）を抽出してください。
+以下のJSONフォーマットのみを返してください。
+
+{
+  "title": "募集している役職や役割の短いタイトル",
+  "deadline": "募集期限（例: 今週金曜まで、決まり次第終了、など）",
+  "actionUrl": "応募フォームなどのURLがあればそれ。なければ空文字",
+  "actionLabel": "リンクを開くボタンのラベル（例: 応募する、詳細を見る）",
+  "description": "仕事の概要やアピールポイント、条件など（1〜2行）",
+  "urgency": "high または medium または low"
+}
+
+メッセージ：
+${text}
+`;
+        }
 
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -62,47 +73,31 @@ ${lastMessage}
           }
         });
 
-        const todoData = JSON.parse(response.text);
+        const extractedData = JSON.parse(response.text);
 
-        // Firestoreのtodosに保存
-        const todosUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/todos`;
+        // Firestoreに保存
+        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}`;
         const firestoreDoc = {
           fields: {
-            title: { stringValue: todoData.title || "" },
-            deadline: { stringValue: todoData.deadline || "" },
-            actionUrl: { stringValue: todoData.actionUrl || "" },
-            actionLabel: { stringValue: todoData.actionLabel || "" },
-            description: { stringValue: todoData.description || "" },
-            urgency: { stringValue: todoData.urgency || "medium" },
+            title: { stringValue: extractedData.title || "" },
+            deadline: { stringValue: extractedData.deadline || "" },
+            actionUrl: { stringValue: extractedData.actionUrl || "" },
+            actionLabel: { stringValue: extractedData.actionLabel || "" },
+            description: { stringValue: extractedData.description || "" },
+            urgency: { stringValue: extractedData.urgency || "medium" },
             completed: { booleanValue: false },
             createdAt: { timestampValue: new Date().toISOString() }
           }
         };
 
-        await fetch(todosUrl, {
+        await fetch(dbUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(firestoreDoc)
         });
 
-        // LINEに完了を返信
-        await replyLine(event.replyToken, `✅ ダッシュボードにTo-Doを追加しました！\n\n「${todoData.title}」\n(締切: ${todoData.deadline})`);
-
-      } else {
-        // !todo以外の普通のメッセージならキャッシュ（Firestore）に上書き保存
-        const cacheUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/line_cache/${sourceId}`;
-        const cacheDoc = {
-          fields: {
-            text: { stringValue: text },
-            timestamp: { timestampValue: new Date().toISOString() }
-          }
-        };
-
-        await fetch(cacheUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cacheDoc)
-        });
+        const typeLabel = isTodo ? "To-Do" : "求人情報";
+        await replyLine(event.replyToken, `✅ ダッシュボードに${typeLabel}を追加しました！\n\n「${extractedData.title}」\n(期限: ${extractedData.deadline})`);
       }
     }
 
