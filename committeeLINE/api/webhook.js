@@ -48,10 +48,16 @@ export default async function handler(req, res) {
         
         if (isTodo) {
           collectionName = 'todos';
-          prompt = `以下のメッセージからTo-Doを抽出してください。JSONのみ返却。\n{"title":"タイトル","deadline":"期限","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}\n\n${text}`;
+          prompt = `以下のメッセージからTo-Doを抽出してください。JSONのみ返却。
+{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+
+${text}`;
         } else {
           collectionName = 'jobs';
-          prompt = `以下のメッセージから求人情報を抽出してください。JSONのみ返却。\n{"title":"タイトル","deadline":"期限","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}\n\n${text}`;
+          prompt = `以下のメッセージから求人情報を抽出してください。JSONのみ返却。
+{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+
+${text}`;
         }
 
         const response = await ai.models.generateContent({
@@ -62,7 +68,8 @@ export default async function handler(req, res) {
 
         const extractedData = JSON.parse(response.text);
         const messageId = event.message.id || Date.now().toString();
-        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt`;
+        const lineTargetId = event.source.groupId || event.source.userId || "";
+        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=dueDateISO&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt&updateMask.fieldPaths=lineTargetId`;
         
         await fetch(dbUrl, {
           method: 'PATCH',
@@ -71,12 +78,14 @@ export default async function handler(req, res) {
             fields: {
               title: { stringValue: extractedData.title || "" },
               deadline: { stringValue: extractedData.deadline || "" },
+              dueDateISO: { stringValue: extractedData.dueDateISO || "" },
               actionUrl: { stringValue: extractedData.actionUrl || "" },
               actionLabel: { stringValue: extractedData.actionLabel || "" },
               description: { stringValue: extractedData.description || "" },
               urgency: { stringValue: extractedData.urgency || "medium" },
               completed: { booleanValue: false },
-              createdAt: { timestampValue: new Date().toISOString() }
+              createdAt: { timestampValue: new Date().toISOString() },
+              lineTargetId: { stringValue: lineTargetId }
             }
           })
         });
