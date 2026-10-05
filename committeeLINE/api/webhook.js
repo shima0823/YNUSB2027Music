@@ -75,8 +75,10 @@ ${text}
 
         const extractedData = JSON.parse(response.text);
 
-        // Firestoreに保存
-        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}`;
+        // Firestoreに保存 (messageIdをドキュメントIDにして重複作成を完全に防ぐ)
+        const messageId = event.message.id || Date.now().toString();
+        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt`;
+        
         const firestoreDoc = {
           fields: {
             title: { stringValue: extractedData.title || "" },
@@ -91,7 +93,7 @@ ${text}
         };
 
         await fetch(dbUrl, {
-          method: 'POST',
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(firestoreDoc)
         });
