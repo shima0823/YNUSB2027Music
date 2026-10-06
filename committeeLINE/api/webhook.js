@@ -90,8 +90,7 @@ ${text}`;
           })
         });
 
-        const typeLabel = isTodo ? "To-Do" : "求人情報";
-        await replyLine(event.replyToken, `✅ ダッシュボードに${typeLabel}を追加しました！\n\n「${extractedData.title}」\n(期限: ${extractedData.deadline})`);
+        // ユーザーの要望により、通知過多を防ぐため「追加しました」の確認メッセージは送信しないようにしました
       }
     }
 
