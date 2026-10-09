@@ -44,18 +44,21 @@ export default async function handler(req, res) {
 
       if (isTodo || isJob) {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+        const todayDate = new Date().toLocaleDateString('ja-JP');
         let prompt, collectionName;
         
         if (isTodo) {
           collectionName = 'todos';
-          prompt = `以下のメッセージからTo-Doを抽出してください。JSONのみ返却。
-{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+          prompt = `【現在の日時: ${todayDate}】
+以下のメッセージからTo-Doを抽出してください。JSONのみ返却。
+{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
 
 ${text}`;
         } else {
           collectionName = 'jobs';
-          prompt = `以下のメッセージから求人情報を抽出してください。JSONのみ返却。
-{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+          prompt = `【現在の日時: ${todayDate}】
+以下のメッセージから求人情報を抽出してください。JSONのみ返却。
+{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
 
 ${text}`;
         }
