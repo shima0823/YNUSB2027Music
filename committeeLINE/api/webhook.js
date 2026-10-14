@@ -44,7 +44,11 @@ export default async function handler(req, res) {
 
       if (isTodo || isJob) {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-        const todayDate = new Date().toLocaleDateString('ja-JP');
+        const nowUtc = new Date();
+        const jstOffsetMs = 9 * 60 * 60 * 1000;
+        const nowJst = new Date(nowUtc.getTime() + jstOffsetMs);
+        const todayDate = `${nowJst.getUTCFullYear()}年${nowJst.getUTCMonth() + 1}月${nowJst.getUTCDate()}日`;
+        
         let prompt, collectionName;
         
         if (isTodo) {
@@ -70,6 +74,26 @@ ${text}`;
         });
 
         const extractedData = JSON.parse(response.text);
+        
+        // dueDateISOが空または無効な場合のフォールバック
+        let finalDueDateISO = extractedData.dueDateISO || "";
+        if (!finalDueDateISO && extractedData.deadline) {
+          const currentYear = nowJst.getUTCFullYear();
+          const m1 = extractedData.deadline.match(/(\d{1,2})[\/月](\d{1,2})/);
+          if (m1) {
+            const m = String(parseInt(m1[1], 10)).padStart(2, '0');
+            const d = String(parseInt(m1[2], 10)).padStart(2, '0');
+            finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
+          } else {
+            const m2 = extractedData.deadline.match(/(\d{1,2})日/);
+            if (m2) {
+              const m = String(nowJst.getUTCMonth() + 1).padStart(2, '0');
+              const d = String(parseInt(m2[1], 10)).padStart(2, '0');
+              finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
+            }
+          }
+        }
+
         const messageId = event.message.id || Date.now().toString();
         const lineTargetId = event.source.groupId || event.source.userId || "";
         const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=dueDateISO&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt&updateMask.fieldPaths=lineTargetId`;
@@ -81,7 +105,7 @@ ${text}`;
             fields: {
               title: { stringValue: extractedData.title || "" },
               deadline: { stringValue: extractedData.deadline || "" },
-              dueDateISO: { stringValue: extractedData.dueDateISO || "" },
+              dueDateISO: { stringValue: finalDueDateISO || "" },
               actionUrl: { stringValue: extractedData.actionUrl || "" },
               actionLabel: { stringValue: extractedData.actionLabel || "" },
               description: { stringValue: extractedData.description || "" },
