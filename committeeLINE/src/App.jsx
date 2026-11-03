@@ -2,9 +2,15 @@ import { useState, useEffect } from 'react'
 import { FileText, Calendar, CheckSquare, Music, Bell, ExternalLink, CheckCircle2, ChevronRight, ArrowRight, Lock, Unlock, Users } from 'lucide-react'
 import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'
 import { db } from './firebase'
+import WorkLog from './WorkLog'
 
 function App() {
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState(() => window.location.hash === '#work-log' ? 'work-log' : 'home');
+  useEffect(() => {
+    const navigate = () => setActiveTab(window.location.hash === '#work-log' ? 'work-log' : 'home');
+    window.addEventListener('hashchange', navigate);
+    return () => window.removeEventListener('hashchange', navigate);
+  }, []);
   const [todoList, setTodoList] = useState([]);
   const [jobList, setJobList] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -82,7 +88,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen max-w-md mx-auto bg-gray-50 shadow-md flex flex-col relative overflow-hidden font-sans pb-16">
+    <div className={`min-h-screen ${activeTab === 'work-log' ? 'max-w-5xl' : 'max-w-md'} mx-auto bg-gray-50 shadow-md flex flex-col relative overflow-hidden font-sans pb-16`}>
       {/* Header */}
       <header className="bg-slate-800 text-white p-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
         <div>
@@ -113,9 +119,18 @@ function App() {
         </div>
       )}
 
+      <nav aria-label="メインメニュー" className="flex gap-2 p-3 bg-white border-b border-slate-200">
+        <a href="#" aria-current={activeTab === 'home' ? 'page' : undefined} className={`flex-1 text-center text-sm font-bold py-3 rounded-lg ${activeTab === 'home' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>ホーム</a>
+        <a href="#work-log" aria-current={activeTab === 'work-log' ? 'page' : undefined} className={`flex-1 text-center text-sm font-bold py-3 rounded-lg ${activeTab === 'work-log' ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>業務記録</a>
+      </nav>
+      {activeTab === 'work-log' ? <WorkLog /> : <>
       {/* Main Content */}
       <main className="flex-1 p-4 overflow-y-auto space-y-6">
         
+        <a href="#work-log" className="block bg-emerald-700 text-white rounded-xl p-5 shadow-sm">
+          <span className="block font-bold">やった仕事を記録する →</span>
+          <span className="block text-xs text-emerald-50 mt-2">みんなの業務を見える化して，負担を分かち合う．</span>
+        </a>
         {/* To-Doリスト */}
         <section>
           <div className="flex items-center justify-between mb-3">
@@ -232,8 +247,10 @@ function App() {
         </section>
 
       </main>
+      </>}
     </div>
   )
 }
 
 export default App
+
