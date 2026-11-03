@@ -5,9 +5,21 @@ import { db } from './firebase';
 import { MEMBERS, todayJst, filterRecords, csvText } from './workLogData';
 import './WorkLog.css';
 
+const MEMBER_STORAGE_KEY = 'ynusb2027.workLog.member';
+
+function readRememberedMember() {
+  try {
+    const saved = window.localStorage.getItem(MEMBER_STORAGE_KEY);
+    return MEMBERS.includes(saved) ? saved : '';
+  } catch {
+    return '';
+  }
+}
+
 export default function WorkLog() {
-  const [view, setView] = useState('choose');
-  const [member, setMember] = useState('');
+  const [member, setMember] = useState(readRememberedMember);
+  const [view, setView] = useState(() => member ? 'write' : 'choose');
+  const [storageWarning, setStorageWarning] = useState('');
   const [description, setDescription] = useState('');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +48,16 @@ export default function WorkLog() {
   }, [attempt]);
 
   useEffect(() => { heading.current?.focus(); }, [view]);
+
+  function selectMember(name) {
+    setMember(name);
+    try {
+      window.localStorage.setItem(MEMBER_STORAGE_KEY, name);
+      setStorageWarning('');
+    } catch {
+      setStorageWarning('この環境では名前を保存できません．今回は入力できますが，次回は名前を選び直してください．');
+    }
+  }
 
   const changeView = next => { setSaveError(''); setView(next); };
   const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
@@ -85,15 +107,17 @@ export default function WorkLog() {
       <span className="wl-mark" aria-hidden="true">♪</span>
     </div>
     <div className="wl-tabs" role="group" aria-label="業務記録の画面切り替え">
-      <button type="button" aria-pressed={view !== 'list'} onClick={() => changeView('choose')} disabled={saving}><PenLine size={17} />仕事を記録</button>
+      <button type="button" aria-pressed={view !== 'list'} onClick={() => changeView(member ? 'write' : 'choose')} disabled={saving}><PenLine size={17} />仕事を記録</button>
       <button type="button" aria-pressed={view === 'list'} onClick={() => changeView('list')} disabled={saving}><List size={17} />みんなの記録</button>
     </div>
 
+    {storageWarning && <p className="wl-error" role="status">{storageWarning}</p>}
+
     {view === 'choose' && <section className="wl-card wl-form-card">
-      <p className="wl-step">STEP 1 / 2</p><h3>あなたの名前を選んでください</h3><p className="wl-help">仕事をしたメンバーの名前を選びます．</p>
+      <p className="wl-step">STEP 1 / 2</p><h3>あなたの名前を選んでください</h3><p className="wl-help">選んだ名前はこの端末に自動で保存し，次回から名前選択を省略します．</p>
       <form onSubmit={event => { event.preventDefault(); changeView('write'); }}>
         <label htmlFor="wl-member">名前 <span className="wl-required">必須</span></label>
-        <select id="wl-member" required value={member} onChange={event => setMember(event.target.value)}>
+        <select id="wl-member" required value={member} onChange={event => selectMember(event.target.value)}>
           <option value="" disabled>名前を選択</option>{MEMBERS.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
         <button className="wl-primary" type="submit" disabled={!member}>仕事の入力へ <ArrowRight size={17} /></button>
@@ -102,7 +126,7 @@ export default function WorkLog() {
 
     {view === 'write' && <section className="wl-card wl-form-card">
       <p className="wl-step">STEP 2 / 2</p><h3>やった仕事を教えてください</h3>
-      <div className="wl-person"><span>{member}</span><button type="button" disabled={saving} onClick={() => changeView('choose')}>名前を変更</button></div>
+      <div className="wl-person"><span>{member}さんとして記録中</span><button type="button" disabled={saving} onClick={() => changeView('choose')}>名前を変更</button></div>
       <form onSubmit={save}>
         <fieldset disabled={saving}>
           <label htmlFor="wl-description">やった仕事 <span className="wl-required">必須</span></label>
