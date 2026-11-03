@@ -88,7 +88,7 @@ function App() {
   };
 
   return (
-    <div className={`min-h-screen ${activeTab === 'work-log' ? 'max-w-5xl' : 'max-w-md'} mx-auto bg-gray-50 shadow-md flex flex-col relative overflow-hidden font-sans pb-16`}>
+    <div className="min-h-screen max-w-md mx-auto bg-gray-50 shadow-md flex flex-col relative overflow-hidden font-sans pb-16">
       {/* Header */}
       <header className="bg-slate-800 text-white p-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
         <div>
