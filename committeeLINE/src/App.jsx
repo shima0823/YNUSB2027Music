@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { FileText, Calendar, CheckSquare, Music, Bell, ExternalLink, CheckCircle2, ChevronRight, ArrowRight, Lock, Unlock, Users } from 'lucide-react'
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'
+import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, runTransaction, serverTimestamp, deleteField } from 'firebase/firestore'
 import { db } from './firebase'
 import WorkLog from './WorkLog'
+import { MEMBERS } from './workLogData'
+
+const jobAssignees = job => MEMBERS.filter(name => (Array.isArray(job.assignees) ? job.assignees : [job.assignee]).includes(name));
 
 function App() {
   const [activeTab, setActiveTab] = useState(() => window.location.hash === '#work-log' ? 'work-log' : 'home');
@@ -13,6 +16,10 @@ function App() {
   }, []);
   const [todoList, setTodoList] = useState([]);
   const [jobList, setJobList] = useState([]);
+  const [assigneeDrafts, setAssigneeDrafts] = useState({});
+  const [assignmentPending, setAssignmentPending] = useState({});
+  const [assignmentMessages, setAssignmentMessages] = useState({});
+  const assigningJobs = useRef(new Set());
   const [isAdmin, setIsAdmin] = useState(false);
   const [pin, setPin] = useState('');
   const [showPinInput, setShowPinInput] = useState(false);
@@ -84,6 +91,65 @@ function App() {
         console.error("Firestore Update Error:", error);
         alert(`エラーが発生しました: ${error.message}\nFirestoreのセキュリティルールを確認してください。`);
       }
+    }
+  };
+
+  const saveAssignee = async (event, job) => {
+    event.preventDefault();
+    if (assigningJobs.current.has(job.id)) return;
+    const assignees = assigneeDrafts[job.id] ?? jobAssignees(job);
+    const message = (text, error = false) => setAssignmentMessages(current => ({ ...current, [job.id]: { text, error } }));
+    if (!assignees.every(name => MEMBERS.includes(name))) {
+      message('担当者を選んでください．', true);
+      return;
+    }
+    if (!navigator.onLine) {
+      message('オフラインです．接続後にもう一度登録してください．', true);
+      return;
+    }
+    assigningJobs.current.add(job.id);
+    setAssignmentPending(current => ({ ...current, [job.id]: true }));
+    message('登録しています…完了まで，この画面を開いたままお待ちください．');
+    try {
+      const jobRef = doc(db, 'jobs', job.id);
+      await runTransaction(db, async transaction => {
+        const currentJob = await transaction.get(jobRef);
+        if (!currentJob.exists() || currentJob.data().completed) throw new Error('job-unavailable');
+        const data = currentJob.data();
+        const previous = jobAssignees(data);
+        // Stable IDs give each assignee one linked log，including after retries.
+        const names = MEMBERS.filter(name => assignees.includes(name) || previous.includes(name));
+        const logs = await Promise.all(names.map(async name => {
+          const ref = doc(db, 'workLogs', `job_${job.id}_${MEMBERS.indexOf(name)}`);
+          return { name, ref, snapshot: await transaction.get(ref) };
+        }));
+        const description = [`求人の担当：${data.title || '（タイトルなし）'}`, data.description].filter(Boolean).join('\n');
+        transaction.update(jobRef, { assignees, assignee: deleteField() });
+        logs.forEach(({ name, ref, snapshot }) => {
+          if (assignees.includes(name)) {
+            transaction.set(ref, {
+              member: name,
+              description,
+              sourceJobId: job.id,
+              ...(snapshot.exists() ? {} : { createdAt: serverTimestamp() }),
+              ...(!previous.includes(name) ? { deletedAt: deleteField() } : {}),
+            }, { merge: true });
+          } else if (snapshot.exists()) {
+            transaction.update(ref, { deletedAt: serverTimestamp() });
+          }
+        });
+      });
+      setAssigneeDrafts(current => {
+        const next = { ...current };
+        delete next[job.id];
+        return next;
+      });
+      message('担当者と業務記録を登録しました．');
+    } catch {
+      message('登録できませんでした．接続・書き込み権限と，求人が募集中かを確認して，再度登録してください．', true);
+    } finally {
+      assigningJobs.current.delete(job.id);
+      setAssignmentPending(current => ({ ...current, [job.id]: false }));
     }
   };
 
@@ -205,13 +271,34 @@ function App() {
                         〆切: {job.deadline}
                       </span>
                       {isAdmin && (
-                        <button onClick={() => handleComplete('jobs', job.id)} className="p-1 text-slate-400 hover:text-blue-600 transition">
+                        <button disabled={assignmentPending[job.id]} onClick={() => handleComplete('jobs', job.id)} className="p-1 text-slate-400 hover:text-blue-600 transition disabled:opacity-50">
                           <CheckCircle2 className="w-5 h-5" />
                         </button>
                       )}
                     </div>
                   </div>
                   {job.description && <p className="text-xs text-slate-600 mb-3 relative z-10">{job.description}</p>}
+                  <form onSubmit={event => saveAssignee(event, job)} className="mb-3 relative z-10">
+                    <fieldset disabled={assignmentPending[job.id]}>
+                      <legend className="text-xs font-bold text-slate-700 mb-2">担当者（複数選択可）</legend>
+                      <p className="mb-2 text-xs text-slate-600">登録済み：{jobAssignees(job).join('，') || '未登録'}</p>
+                      <div className="grid grid-cols-3 gap-1">
+                        {MEMBERS.map(name => <label key={name} className="flex items-center gap-2 py-2 text-sm text-slate-700">
+                          <input type="checkbox" checked={(assigneeDrafts[job.id] ?? jobAssignees(job)).includes(name)} onChange={event => {
+                            const checked = event.target.checked;
+                            setAssigneeDrafts(current => {
+                              const selected = current[job.id] ?? jobAssignees(job);
+                              return { ...current, [job.id]: MEMBERS.filter(member => member === name ? checked : selected.includes(member)) };
+                            });
+                            setAssignmentMessages(current => ({ ...current, [job.id]: null }));
+                          }} className="h-4 w-4 shrink-0 accent-blue-600" />{name}
+                        </label>)}
+                      </div>
+                      <button type="submit" disabled={assignmentPending[job.id] || JSON.stringify(assigneeDrafts[job.id] ?? jobAssignees(job)) === JSON.stringify(jobAssignees(job))} className="mt-2 w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{assignmentPending[job.id] ? '登録中…' : '担当者を登録'}</button>
+                    </fieldset>
+                    <p className="mt-2 text-xs text-slate-500">登録時に，担当者ごとに求人内容を業務記録へ追加します．担当から外した人の連動記録は非表示になります．</p>
+                    {assignmentMessages[job.id] && <p role={assignmentMessages[job.id].error ? 'alert' : 'status'} className={`mt-2 text-xs ${assignmentMessages[job.id].error ? 'text-red-700' : 'text-emerald-700'}`}>{assignmentMessages[job.id].text}</p>}
+                  </form>
                   
                   {job.actionUrl && (
                     <a href={job.actionUrl} target="_blank" rel="noreferrer" className="flex items-center justify-center w-full py-2 px-4 rounded-lg text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white transition-colors relative z-10">
