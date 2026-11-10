@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { collection, doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, deleteField, doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { ArrowLeft, ArrowRight, CheckCircle2, Download, List, PenLine } from 'lucide-react';
 import { db } from './firebase';
 import { MEMBERS, todayJst, filterRecords, csvText } from './workLogData';
@@ -28,6 +28,11 @@ export default function WorkLog() {
   const [saving, setSaving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [filters, setFilters] = useState({ member: '' });
+  const [recordAction, setRecordAction] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [undoRecord, setUndoRecord] = useState(null);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const changingRecord = useRef(false);
   const submission = useRef(null);
   const submitting = useRef(false);
   const heading = useRef(null);
@@ -36,7 +41,8 @@ export default function WorkLog() {
     setLoading(true);
     setReadError('');
     return onSnapshot(collection(db, 'workLogs'), snapshot => {
-      const rows = snapshot.docs.map(item => ({ ...item.data(), id: item.id }))
+      const rows = snapshot.docs.map(item => ({ ...item.data({ serverTimestamps: 'estimate' }), id: item.id }))
+        .filter(row => row.deletedAt == null)
         .filter(row => typeof row.member === 'string' && typeof row.description === 'string');
       rows.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       setRecords(rows);
@@ -48,6 +54,39 @@ export default function WorkLog() {
   }, [attempt]);
 
   useEffect(() => { heading.current?.focus(); }, [view]);
+
+  useEffect(() => {
+    const updateOnline = () => setOnline(navigator.onLine);
+    window.addEventListener('online', updateOnline);
+    window.addEventListener('offline', updateOnline);
+    return () => {
+      window.removeEventListener('online', updateOnline);
+      window.removeEventListener('offline', updateOnline);
+    };
+  }, []);
+
+  async function changeRecord(record, restoring = false) {
+    if (changingRecord.current || record.member !== member || !MEMBERS.includes(member)) return;
+    setActionError('');
+    if (!navigator.onLine) {
+      setActionError('オフラインです．接続後にもう一度操作してください．');
+      return;
+    }
+    if (!restoring && !window.confirm(`「${record.description}」を削除しますか？`)) return;
+    changingRecord.current = true;
+    setRecordAction(restoring ? '復元' : '削除');
+    try {
+      await updateDoc(doc(db, 'workLogs', record.id), {
+        deletedAt: restoring ? deleteField() : serverTimestamp(),
+      });
+      setUndoRecord(restoring ? null : record);
+    } catch {
+      setActionError(`${restoring ? '復元' : '削除'}できませんでした．接続と書き込み権限を確認して，もう一度操作してください．`);
+    } finally {
+      changingRecord.current = false;
+      setRecordAction('');
+    }
+  }
 
   function selectMember(name) {
     setMember(name);
@@ -112,6 +151,10 @@ export default function WorkLog() {
     </div>
 
     {storageWarning && <p className="wl-error" role="status">{storageWarning}</p>}
+    {!online && <p className="wl-error" role="status">オフラインです．{recordAction ? '処理結果はまだ確認できません．接続が戻るまで，この画面を開いたままお待ちください．' : '接続後に保存・削除・復元してください．'}</p>}
+    {actionError && <p className="wl-error" role="alert">{actionError}</p>}
+    {recordAction && <p className="wl-help" role="status">{recordAction}しています…完了まで，この画面を開いたままお待ちください．</p>}
+    {undoRecord?.member === member && <div className="wl-person" role="status"><span>記録を削除しました．</span><button type="button" disabled={!!recordAction} onClick={() => changeRecord(undoRecord, true)}>元に戻す</button></div>}
 
     {view === 'choose' && <section className="wl-card wl-form-card">
       <p className="wl-step">STEP 1 / 2</p><h3>あなたの名前を選んでください</h3><p className="wl-help">選んだ名前はこの端末に自動で保存し，次回から名前選択を省略します．</p>
@@ -154,7 +197,7 @@ export default function WorkLog() {
         <button className="wl-text-button" onClick={() => setFilters({ member: '' })}>条件をクリア</button>
       </div>
       {loading ? <p className="wl-empty" role="status">記録を読み込んでいます…</p> : readError ? <div className="wl-empty" role="alert"><p>{readError}</p><button className="wl-secondary" onClick={() => setAttempt(value => value + 1)}>再読み込み</button></div> : (filtered.length ? <div className="wl-table-scroll" tabIndex={0} role="region" aria-label="業務記録の表（横にスクロールできます）">
-        <table><caption className="wl-sr-only">音楽委員会の業務記録．登録の新しい順．</caption><thead><tr><th scope="col">名前</th><th scope="col">やった仕事</th></tr></thead><tbody>{filtered.map(record => <tr key={record.id}><td><span className="wl-name-tag">{record.member}</span></td><td className="wl-description">{record.description}</td></tr>)}</tbody></table>
+        <table><caption className="wl-sr-only">音楽委員会の業務記録．登録の新しい順．</caption><thead><tr><th scope="col">名前</th><th scope="col">やった仕事</th></tr></thead><tbody>{filtered.map(record => <tr key={record.id}><td><span className="wl-name-tag">{record.member}</span></td><td className="wl-description">{record.description}{record.member === member && <div><button type="button" className="wl-text-button" disabled={!!recordAction} aria-label={`${record.description}を削除`} onClick={() => changeRecord(record)}>削除</button></div>}</td></tr>)}</tbody></table>
       </div> : <div className="wl-empty"><p>{records.length ? 'この条件に合う記録はありません．' : 'まだ業務記録はありません．最初の仕事を残してみましょう．'}</p><button className="wl-secondary" onClick={() => changeView('choose')}>仕事を記録する</button></div>)}
     </section>}
     <a className="wl-home" href="#"><ArrowLeft size={15} />ポータルのホームへ</a>
