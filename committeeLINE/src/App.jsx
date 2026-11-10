@@ -17,6 +17,7 @@ function App() {
   const [todoList, setTodoList] = useState([]);
   const [jobList, setJobList] = useState([]);
   const [assigneeDrafts, setAssigneeDrafts] = useState({});
+  const [editingAssignments, setEditingAssignments] = useState({});
   const [assignmentPending, setAssignmentPending] = useState({});
   const [assignmentMessages, setAssignmentMessages] = useState({});
   const assigningJobs = useRef(new Set());
@@ -145,6 +146,7 @@ function App() {
         return next;
       });
       message('担当者と業務記録を登録しました．');
+      setEditingAssignments(current => ({ ...current, [job.id]: false }));
     } catch {
       message('登録できませんでした．接続・書き込み権限と，求人が募集中かを確認して，再度登録してください．', true);
     } finally {
@@ -278,12 +280,23 @@ function App() {
                     </div>
                   </div>
                   {job.description && <p className="text-xs text-slate-600 mb-3 relative z-10">{job.description}</p>}
-                  <form onSubmit={event => saveAssignee(event, job)} className="mb-3 relative z-10">
+                  <div className="mb-3 relative z-10 flex items-start justify-between gap-2 text-xs">
+                    <p className="text-slate-600">担当：{jobAssignees(job).join('，') || '未登録'}</p>
+                    <button type="button" aria-expanded={!!editingAssignments[job.id]} aria-controls={`job-assignment-${job.id}`} disabled={assignmentPending[job.id]} onClick={() => {
+                      setEditingAssignments(current => ({ ...current, [job.id]: !current[job.id] }));
+                      setAssigneeDrafts(current => {
+                        const next = { ...current };
+                        delete next[job.id];
+                        return next;
+                      });
+                      setAssignmentMessages(current => ({ ...current, [job.id]: null }));
+                    }} className="shrink-0 text-blue-700 underline underline-offset-2 disabled:opacity-50">{editingAssignments[job.id] ? '閉じる' : jobAssignees(job).length ? '変更' : '担当者を設定'}</button>
+                  </div>
+                  {editingAssignments[job.id] && <form id={`job-assignment-${job.id}`} onSubmit={event => saveAssignee(event, job)} className="mb-3 relative z-10">
                     <fieldset disabled={assignmentPending[job.id]}>
                       <legend className="text-xs font-bold text-slate-700 mb-2">担当者（複数選択可）</legend>
-                      <p className="mb-2 text-xs text-slate-600">登録済み：{jobAssignees(job).join('，') || '未登録'}</p>
                       <div className="grid grid-cols-3 gap-1">
-                        {MEMBERS.map(name => <label key={name} className="flex items-center gap-2 py-2 text-sm text-slate-700">
+                        {MEMBERS.map(name => <label key={name} className="flex items-center gap-2 py-1.5 text-xs text-slate-700">
                           <input type="checkbox" checked={(assigneeDrafts[job.id] ?? jobAssignees(job)).includes(name)} onChange={event => {
                             const checked = event.target.checked;
                             setAssigneeDrafts(current => {
@@ -297,8 +310,8 @@ function App() {
                       <button type="submit" disabled={assignmentPending[job.id] || JSON.stringify(assigneeDrafts[job.id] ?? jobAssignees(job)) === JSON.stringify(jobAssignees(job))} className="mt-2 w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{assignmentPending[job.id] ? '登録中…' : '担当者を登録'}</button>
                     </fieldset>
                     <p className="mt-2 text-xs text-slate-500">登録時に，担当者ごとに求人内容を業務記録へ追加します．担当から外した人の連動記録は非表示になります．</p>
-                    {assignmentMessages[job.id] && <p role={assignmentMessages[job.id].error ? 'alert' : 'status'} className={`mt-2 text-xs ${assignmentMessages[job.id].error ? 'text-red-700' : 'text-emerald-700'}`}>{assignmentMessages[job.id].text}</p>}
-                  </form>
+                  </form>}
+                  {assignmentMessages[job.id] && <p role={assignmentMessages[job.id].error ? 'alert' : 'status'} className={`mb-3 relative z-10 text-xs ${assignmentMessages[job.id].error ? 'text-red-700' : 'text-emerald-700'}`}>{assignmentMessages[job.id].text}</p>}
                   
                   {job.actionUrl && (
                     <a href={job.actionUrl} target="_blank" rel="noreferrer" className="flex items-center justify-center w-full py-2 px-4 rounded-lg text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white transition-colors relative z-10">
