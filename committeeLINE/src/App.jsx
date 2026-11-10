@@ -195,10 +195,37 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 p-4 overflow-y-auto space-y-6">
         
-        <a href="#work-log" className="block bg-emerald-700 text-white rounded-xl p-5 shadow-sm">
-          <span className="block font-bold">やった仕事を記録する →</span>
-          <span className="block text-xs text-emerald-50 mt-2">みんなの業務を見える化して，負担を分かち合う．</span>
-        </a>
+        {/* クイックアクセスリンク集 */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <ExternalLink className="w-5 h-5 text-indigo-500" />
+            <h2 className="text-gray-700 font-bold text-sm">クイックアクセス (基本リンク集)</h2>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
+            <a href="#work-log" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
+              <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600 mr-4">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <p className="font-bold text-slate-800 text-sm">やった仕事を記録する</p>
+                <p className="text-xs text-slate-500">音楽委員会の業務記録</p>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-300" />
+            </a>
+            <a href="https://ryosukeshima0823.github.io/YNUSB2026Music/" target="_blank" rel="noreferrer" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
+              <div className="bg-purple-100 p-2 rounded-lg text-purple-600 mr-4">
+                <Music className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <p className="font-bold text-slate-800 text-sm">音委リフレクション</p>
+                <p className="text-xs text-slate-500">練習の振り返り用ウェブアプリ</p>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-300" />
+            </a>
+          </div>
+        </section>
+
         {/* To-Doリスト */}
         <section>
           <div className="flex items-center justify-between mb-3">
@@ -322,27 +349,6 @@ function App() {
                 </div>
               ))
             )}
-          </div>
-        </section>
-
-        {/* クイックアクセスリンク集 */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <ExternalLink className="w-5 h-5 text-indigo-500" />
-            <h2 className="text-gray-700 font-bold text-sm">クイックアクセス (基本リンク集)</h2>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
-            <a href="https://ryosukeshima0823.github.io/YNUSB2026Music/" target="_blank" rel="noreferrer" className="flex items-center p-4 hover:bg-slate-50 active:bg-slate-100 transition">
-              <div className="bg-purple-100 p-2 rounded-lg text-purple-600 mr-4">
-                <Music className="w-5 h-5" />
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-slate-800 text-sm">音委リフレクション</p>
-                <p className="text-xs text-slate-500">練習の振り返り用ウェブアプリ</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-300" />
-            </a>
           </div>
         </section>
 
