@@ -45,18 +45,22 @@ export default async function handler(req, res) {
       const isTodo = text.includes('!todo') || text.includes('！todo') || text.includes('!TODO');
       const isJob = text.includes('!求人') || text.includes('！求人');
 
-      // 「！要約」以外のテキストメッセージはすべて要約用に履歴保存する
-      if (!isSummary && lineTargetId) {
+      // 「！要約」以外のグループメッセージは要約用に履歴保存する
+      if (!isSummary && event.source.type === 'group' && event.source.groupId) {
         try {
-          const senderName = await getSenderName(event.source);
+          const [senderName, groupName] = await Promise.all([
+            getSenderName(event.source),
+            getGroupName(event.source.groupId)
+          ]);
           const msgTimestamp = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString();
-          const msgUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/chat_messages/${messageId}?updateMask.fieldPaths=lineTargetId&updateMask.fieldPaths=userId&updateMask.fieldPaths=senderName&updateMask.fieldPaths=text&updateMask.fieldPaths=createdAt`;
+          const msgUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/chat_messages/${messageId}?updateMask.fieldPaths=lineTargetId&updateMask.fieldPaths=groupName&updateMask.fieldPaths=userId&updateMask.fieldPaths=senderName&updateMask.fieldPaths=text&updateMask.fieldPaths=createdAt`;
           await fetch(msgUrl, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               fields: {
                 lineTargetId: { stringValue: lineTargetId },
+                groupName: { stringValue: groupName },
                 userId: { stringValue: event.source.userId || "" },
                 senderName: { stringValue: senderName },
                 text: { stringValue: text },
@@ -69,7 +73,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // 「！要約」コマンドの処理
+      // 「！要約」コマンドの処理（どのチャットから聞いても全グループの履歴を参照）
       if (isSummary) {
         const days = parseSummaryDays(text);
         const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -95,12 +99,26 @@ export default async function handler(req, res) {
 
         const queryRows = await queryRes.json();
         const messages = [];
+        const groupNameCache = new Map();
+
         if (Array.isArray(queryRows)) {
           for (const row of queryRows) {
             if (!row.document || !row.document.fields) continue;
             const f = row.document.fields;
-            if (f.lineTargetId?.stringValue !== lineTargetId) continue;
+            const msgTargetId = f.lineTargetId?.stringValue || "";
+            // グループチャット（Cで始まるID）のみを対象にする（個人チャットは除外）
+            if (!msgTargetId.startsWith('C')) continue;
+
+            let gName = f.groupName?.stringValue || "";
+            if (!gName) {
+              if (!groupNameCache.has(msgTargetId)) {
+                groupNameCache.set(msgTargetId, await getGroupName(msgTargetId));
+              }
+              gName = groupNameCache.get(msgTargetId);
+            }
+
             messages.push({
+              groupName: gName,
               senderName: f.senderName?.stringValue || "メンバー",
               text: f.text?.stringValue || "",
               createdAt: f.createdAt?.timestampValue || ""
@@ -109,11 +127,11 @@ export default async function handler(req, res) {
         }
 
         if (messages.length === 0) {
-          await replyLine(event.replyToken, `📝 直近${days}日間のトーク履歴が見つかりませんでした。`);
+          await replyLine(event.replyToken, `📝 直近${days}日間のグループトーク履歴が見つかりませんでした。`);
           continue;
         }
 
-        // 会話ログを日本時間付きで整形
+        // 会話ログを日本時間・グループ名付きで整形
         const jstOffsetMs = 9 * 60 * 60 * 1000;
         let conversationLog = messages.map(m => {
           let timeStr = "";
@@ -125,7 +143,8 @@ export default async function handler(req, res) {
             const min = String(d.getUTCMinutes()).padStart(2, '0');
             timeStr = `[${mm}/${dd} ${hh}:${min}] `;
           }
-          return `${timeStr}${m.senderName}: ${m.text}`;
+          const groupTag = m.groupName ? `【${m.groupName}】` : "";
+          return `${groupTag}${timeStr}${m.senderName}: ${m.text}`;
         }).join('\n');
 
         // トークン超過防止のため直近30,000文字に収める
@@ -134,11 +153,12 @@ export default async function handler(req, res) {
         }
 
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-        const summaryPrompt = `以下は音楽委員会のLINEトークにおける直近${days}日間の会話履歴です。
+        const summaryPrompt = `以下は音楽委員会のLINEグループにおける直近${days}日間の会話履歴です。
 この期間の話題をわかりやすく要約してください。
 
 【出力ルール】
-- 話題・トピックごとに整理して見出し（例: ■ 〇〇について）をつける
+- 複数のグループ（【グループ名】）の会話が含まれる場合は、グループごとにセクションを分けて整理する
+- 話題・トピックごとに見出し（例: ■ 〇〇について）をつける
 - 決定したこと、検討・相談中のこと、誰かへの依頼や期限があることがパッと分かるように箇条書き（・）で簡潔にまとめる
 - LINEのトーク画面でそのまま読みやすいプレーンテキストで出力する（**太字** や ### のようなMarkdown記号は使わない）
 - 雑談や挨拶だけの無関係なやり取りは省き、重要な内容を優先する
@@ -338,5 +358,19 @@ async function getSenderName(source) {
     return data.displayName || "メンバー";
   } catch {
     return "メンバー";
+  }
+}
+
+async function getGroupName(groupId) {
+  try {
+    if (!groupId) return "";
+    const res = await fetch(`https://api.line.me/v2/bot/group/${groupId}/summary`, {
+      headers: { "Authorization": "Bearer " + LINE_ACCESS_TOKEN }
+    });
+    if (!res.ok) return "";
+    const data = await res.json();
+    return data.groupName || "";
+  } catch {
+    return "";
   }
 }
