@@ -54,15 +54,21 @@ export default async function handler(req, res) {
         if (isTodo) {
           collectionName = 'todos';
           prompt = `【現在の日時: ${todayDate}】
-以下のメッセージからTo-Doを抽出してください。JSONのみ返却。
-{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+以下のメッセージからTo-Doを抽出してください。
+複数のTo-Doや議題が含まれている場合はJSON配列 [...] で返却し、1つだけの場合は単一オブジェクトまたは要素数1の配列で返却してください。JSONのみ返却。
+[
+  {"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+]
 
 ${text}`;
         } else {
           collectionName = 'jobs';
           prompt = `【現在の日時: ${todayDate}】
-以下のメッセージから求人情報を抽出してください。JSONのみ返却。
-{"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+以下のメッセージから求人情報を抽出してください。
+複数の求人が含まれている場合はJSON配列 [...] で返却し、1つだけの場合は単一オブジェクトまたは要素数1の配列で返却してください。JSONのみ返却。
+[
+  {"title":"タイトル","deadline":"人間が読む期限（例: 10/15 23:59、今日中）","dueDateISO":"期限をISO 8601形式のUTC日時(YYYY-MM-DDTHH:mm:ssZ)で。日付が明確でない場合は空文字。現在の日付を基準に年を補完してください。","actionUrl":"URL","actionLabel":"ラベル","description":"説明","urgency":"high/medium/low"}
+]
 
 ${text}`;
         }
@@ -73,49 +79,74 @@ ${text}`;
           config: { responseMimeType: "application/json" }
         });
 
-        const extractedData = JSON.parse(response.text);
-        
-        // dueDateISOが空または無効な場合のフォールバック
-        let finalDueDateISO = extractedData.dueDateISO || "";
-        if (!finalDueDateISO && extractedData.deadline) {
-          const currentYear = nowJst.getUTCFullYear();
-          const m1 = extractedData.deadline.match(/(\d{1,2})[\/月](\d{1,2})/);
-          if (m1) {
-            const m = String(parseInt(m1[1], 10)).padStart(2, '0');
-            const d = String(parseInt(m1[2], 10)).padStart(2, '0');
-            finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
-          } else {
-            const m2 = extractedData.deadline.match(/(\d{1,2})日/);
-            if (m2) {
-              const m = String(nowJst.getUTCMonth() + 1).padStart(2, '0');
-              const d = String(parseInt(m2[1], 10)).padStart(2, '0');
-              finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
+        let extractedItems = [];
+        try {
+          const parsed = JSON.parse(response.text);
+          if (Array.isArray(parsed)) {
+            extractedItems = parsed;
+          } else if (parsed && typeof parsed === 'object') {
+            if (Array.isArray(parsed.todos)) {
+              extractedItems = parsed.todos;
+            } else if (Array.isArray(parsed.jobs)) {
+              extractedItems = parsed.jobs;
+            } else if (Array.isArray(parsed.items)) {
+              extractedItems = parsed.items;
+            } else {
+              extractedItems = [parsed];
             }
           }
+        } catch (parseErr) {
+          console.error("JSON parse error:", parseErr, response.text);
         }
 
         const messageId = event.message.id || Date.now().toString();
         const lineTargetId = event.source.groupId || event.source.userId || "";
-        const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${messageId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=dueDateISO&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt&updateMask.fieldPaths=lineTargetId`;
-        
-        await fetch(dbUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fields: {
-              title: { stringValue: extractedData.title || "" },
-              deadline: { stringValue: extractedData.deadline || "" },
-              dueDateISO: { stringValue: finalDueDateISO || "" },
-              actionUrl: { stringValue: extractedData.actionUrl || "" },
-              actionLabel: { stringValue: extractedData.actionLabel || "" },
-              description: { stringValue: extractedData.description || "" },
-              urgency: { stringValue: extractedData.urgency || "medium" },
-              completed: { booleanValue: false },
-              createdAt: { timestampValue: new Date().toISOString() },
-              lineTargetId: { stringValue: lineTargetId }
+
+        for (let i = 0; i < extractedItems.length; i++) {
+          const item = extractedItems[i];
+          if (!item || !item.title || item.title.trim() === "") continue;
+
+          // dueDateISOが空または無効な場合のフォールバック
+          let finalDueDateISO = item.dueDateISO || "";
+          if (!finalDueDateISO && item.deadline) {
+            const currentYear = nowJst.getUTCFullYear();
+            const m1 = item.deadline.match(/(\d{1,2})[\/月](\d{1,2})/);
+            if (m1) {
+              const m = String(parseInt(m1[1], 10)).padStart(2, '0');
+              const d = String(parseInt(m1[2], 10)).padStart(2, '0');
+              finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
+            } else {
+              const m2 = item.deadline.match(/(\d{1,2})日/);
+              if (m2) {
+                const m = String(nowJst.getUTCMonth() + 1).padStart(2, '0');
+                const d = String(parseInt(m2[1], 10)).padStart(2, '0');
+                finalDueDateISO = `${currentYear}-${m}-${d}T14:59:59Z`;
+              }
             }
-          })
-        });
+          }
+
+          const docId = extractedItems.length === 1 ? messageId : `${messageId}_${i}`;
+          const dbUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${collectionName}/${docId}?updateMask.fieldPaths=title&updateMask.fieldPaths=deadline&updateMask.fieldPaths=dueDateISO&updateMask.fieldPaths=actionUrl&updateMask.fieldPaths=actionLabel&updateMask.fieldPaths=description&updateMask.fieldPaths=urgency&updateMask.fieldPaths=completed&updateMask.fieldPaths=createdAt&updateMask.fieldPaths=lineTargetId`;
+          
+          await fetch(dbUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: {
+                title: { stringValue: item.title || "" },
+                deadline: { stringValue: item.deadline || "" },
+                dueDateISO: { stringValue: finalDueDateISO || "" },
+                actionUrl: { stringValue: item.actionUrl || "" },
+                actionLabel: { stringValue: item.actionLabel || "" },
+                description: { stringValue: item.description || "" },
+                urgency: { stringValue: item.urgency || "medium" },
+                completed: { booleanValue: false },
+                createdAt: { timestampValue: new Date().toISOString() },
+                lineTargetId: { stringValue: lineTargetId }
+              }
+            })
+          });
+        }
 
         // ユーザーの要望により、通知過多を防ぐため「追加しました」の確認メッセージは送信しないようにしました
       }

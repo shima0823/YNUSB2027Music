@@ -37,7 +37,7 @@ function App() {
       });
       // フィルタリングとソート
       todosData = todosData
-        .filter(task => task.completed === false)
+        .filter(task => task.completed === false && task.title && task.title.trim() !== '')
         .sort((a, b) => getDate(a.createdAt) - getDate(b.createdAt));
       setTodoList(todosData);
     });
@@ -51,7 +51,7 @@ function App() {
       });
       // フィルタリングとソート
       jobsData = jobsData
-        .filter(job => job.completed === false)
+        .filter(job => job.completed === false && job.title && job.title.trim() !== '')
         .sort((a, b) => getDate(a.createdAt) - getDate(b.createdAt));
       setJobList(jobsData);
     });
