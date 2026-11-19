@@ -42,11 +42,15 @@ export default async function handler(req, res) {
       const messageId = event.message.id || Date.now().toString();
       const lineTargetId = event.source.groupId || event.source.roomId || event.source.userId || "";
       const isSummary = text.includes('!要約') || text.includes('！要約');
+      const isReset = text.trim() === '!リセット' || text.trim() === '！リセット';
       const isTodo = text.includes('!todo') || text.includes('！todo') || text.includes('!TODO');
       const isJob = text.includes('!求人') || text.includes('！求人');
+      const isConsultCmd = text.includes('!相談') || text.includes('！相談');
+      // 個人チャットはコマンド以外すべて自然に相談モード。グループは「！相談」のみ反応
+      const isConsult = isConsultCmd || (event.source.type === 'user' && !isSummary && !isReset && !isTodo && !isJob);
 
-      // 「！要約」以外のグループメッセージは要約用に履歴保存する
-      if (!isSummary && event.source.type === 'group' && event.source.groupId) {
+      // 「！要約」「！相談」「！リセット」以外のグループメッセージは要約用に履歴保存する
+      if (!isSummary && !isConsultCmd && !isReset && event.source.type === 'group' && event.source.groupId) {
         try {
           const [senderName, groupName] = await Promise.all([
             getSenderName(event.source),
@@ -73,83 +77,21 @@ export default async function handler(req, res) {
         }
       }
 
+      // 「！リセット」コマンドの処理
+      if (isReset) {
+        await saveChatHistory(lineTargetId, []);
+        await replyLine(event.replyToken, "🔄 これまでの相談・会話履歴をリセットしました！新しい話題をどうぞ。");
+        continue;
+      }
+
       // 「！要約」コマンドの処理（どのチャットから聞いても全グループの履歴を参照）
       if (isSummary) {
         const days = parseSummaryDays(text);
-        const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-
-        const queryRes = await fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents:runQuery`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            structuredQuery: {
-              from: [{ collectionId: "chat_messages" }],
-              where: {
-                fieldFilter: {
-                  field: { fieldPath: "createdAt" },
-                  op: "GREATER_THAN_OR_EQUAL",
-                  value: { timestampValue: cutoffIso }
-                }
-              },
-              orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }],
-              limit: 300
-            }
-          })
-        });
-
-        const queryRows = await queryRes.json();
-        const messages = [];
-        const groupNameCache = new Map();
-
-        if (Array.isArray(queryRows)) {
-          for (const row of queryRows) {
-            if (!row.document || !row.document.fields) continue;
-            const f = row.document.fields;
-            const msgTargetId = f.lineTargetId?.stringValue || "";
-            // グループチャット（Cで始まるID）のみを対象にする（個人チャットは除外）
-            if (!msgTargetId.startsWith('C')) continue;
-
-            let gName = f.groupName?.stringValue || "";
-            if (!gName) {
-              if (!groupNameCache.has(msgTargetId)) {
-                groupNameCache.set(msgTargetId, await getGroupName(msgTargetId));
-              }
-              gName = groupNameCache.get(msgTargetId);
-            }
-
-            messages.push({
-              groupName: gName,
-              senderName: f.senderName?.stringValue || "メンバー",
-              text: f.text?.stringValue || "",
-              createdAt: f.createdAt?.timestampValue || ""
-            });
-          }
-        }
+        const { messages, conversationLog } = await fetchGroupMessages(days);
 
         if (messages.length === 0) {
           await replyLine(event.replyToken, `📝 直近${days}日間のグループトーク履歴が見つかりませんでした。`);
           continue;
-        }
-
-        // 会話ログを日本時間・グループ名付きで整形
-        const jstOffsetMs = 9 * 60 * 60 * 1000;
-        let conversationLog = messages.map(m => {
-          let timeStr = "";
-          if (m.createdAt) {
-            const d = new Date(new Date(m.createdAt).getTime() + jstOffsetMs);
-            const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-            const dd = String(d.getUTCDate()).padStart(2, '0');
-            const hh = String(d.getUTCHours()).padStart(2, '0');
-            const min = String(d.getUTCMinutes()).padStart(2, '0');
-            timeStr = `[${mm}/${dd} ${hh}:${min}] `;
-          }
-          const groupTag = m.groupName ? `【${m.groupName}】` : "";
-          return `${groupTag}${timeStr}${m.senderName}: ${m.text}`;
-        }).join('\n');
-
-        // トークン超過防止のため直近30,000文字に収める
-        if (conversationLog.length > 30000) {
-          conversationLog = conversationLog.slice(-30000);
         }
 
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -175,6 +117,78 @@ ${conversationLog}`;
         if (replyText.length > 4800) {
           replyText = replyText.slice(0, 4800) + "\n…（文字数上限のため省略）";
         }
+
+        // 直後にそのまま相談できるよう、要約結果を会話履歴に保存
+        const prevHistory = await getChatHistory(lineTargetId);
+        const updatedHistory = [
+          ...prevHistory,
+          { role: 'user', text },
+          { role: 'model', text: replyText }
+        ].slice(-12);
+        await saveChatHistory(lineTargetId, updatedHistory);
+
+        await replyLine(event.replyToken, replyText);
+        continue;
+      }
+
+      // 相談モード（個人チャットでの通常メッセージ、またはグループでの「！相談」）
+      if (isConsult) {
+        const cleanQuery = text.replace(/[!！]相談/g, '').trim() || text;
+        const nowUtc = new Date();
+        const jstOffsetMs = 9 * 60 * 60 * 1000;
+        const nowJst = new Date(nowUtc.getTime() + jstOffsetMs);
+        const todayDate = `${nowJst.getUTCFullYear()}年${nowJst.getUTCMonth() + 1}月${nowJst.getUTCDate()}日`;
+
+        const [{ conversationLog }, openTasksText, prevHistory] = await Promise.all([
+          fetchGroupMessages(14),
+          fetchOpenTasks(),
+          getChatHistory(lineTargetId)
+        ]);
+
+        const historyText = prevHistory.length > 0
+          ? prevHistory.map(h => `${h.role === 'user' ? 'ユーザー' : 'アシスタント'}: ${h.text}`).join('\n\n')
+          : '（なし）';
+
+        const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+        const consultPrompt = `あなたは横浜国立大学吹奏楽団（YNUSB）2027年度音楽委員会の頼れる専属アシスタントです。
+現在の日時: ${todayDate}
+
+以下の最新情報（現在のTo-Do・求人、直近14日間のグループトーク履歴、および直前の会話履歴）を踏まえて、ユーザーの相談・質問に親身かつ的確に答えてください。
+
+【出力ルール】
+- LINEのトークでそのまま読みやすいプレーンテキストで出力する（**太字** や ### などのMarkdown記号は使わない）
+- グループの発言やTo-Doに関する質問には、履歴の事実に基づいて正確に答える（履歴にないことは推測で断定せず、分からないと伝える）
+- 進め方の相談、文章案の作成、優先順位の整理などには、具体的で実践的な提案をする
+- 簡潔で読みやすい長さにまとめる
+
+【現在の未完了To-Do・求人一覧】
+${openTasksText}
+
+【直近14日間のグループトーク履歴】
+${conversationLog || '（履歴なし）'}
+
+【このチャットでの直前のやり取り（直前の要約結果などを含む）】
+${historyText}
+
+【今回のユーザーのメッセージ】
+${cleanQuery}`;
+
+        const consultRes = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: consultPrompt
+        });
+
+        let replyText = (consultRes.text || "申し訳ありません、うまく回答を作成できませんでした。もう一度お試しください。").trim();
+        if (replyText.length > 4800) {
+          replyText = replyText.slice(0, 4800) + "\n…（文字数上限のため省略）";
+        }
+
+        const updatedHistory = [
+          ...prevHistory,
+          { role: 'user', text: cleanQuery },
+          { role: 'model', text: replyText }
+        ].slice(-12);
+        await saveChatHistory(lineTargetId, updatedHistory);
 
         await replyLine(event.replyToken, replyText);
         continue;
@@ -372,5 +386,142 @@ async function getGroupName(groupId) {
     return data.groupName || "";
   } catch {
     return "";
+  }
+}
+
+async function fetchGroupMessages(days) {
+  const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const queryRes = await fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents:runQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: "chat_messages" }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: "createdAt" },
+            op: "GREATER_THAN_OR_EQUAL",
+            value: { timestampValue: cutoffIso }
+          }
+        },
+        orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }],
+        limit: 300
+      }
+    })
+  });
+
+  const queryRows = await queryRes.json();
+  const messages = [];
+  const groupNameCache = new Map();
+
+  if (Array.isArray(queryRows)) {
+    for (const row of queryRows) {
+      if (!row.document || !row.document.fields) continue;
+      const f = row.document.fields;
+      const msgTargetId = f.lineTargetId?.stringValue || "";
+      if (!msgTargetId.startsWith('C')) continue;
+
+      let gName = f.groupName?.stringValue || "";
+      if (!gName) {
+        if (!groupNameCache.has(msgTargetId)) {
+          groupNameCache.set(msgTargetId, await getGroupName(msgTargetId));
+        }
+        gName = groupNameCache.get(msgTargetId);
+      }
+
+      messages.push({
+        groupName: gName,
+        senderName: f.senderName?.stringValue || "メンバー",
+        text: f.text?.stringValue || "",
+        createdAt: f.createdAt?.timestampValue || ""
+      });
+    }
+  }
+
+  const jstOffsetMs = 9 * 60 * 60 * 1000;
+  let conversationLog = messages.map(m => {
+    let timeStr = "";
+    if (m.createdAt) {
+      const d = new Date(new Date(m.createdAt).getTime() + jstOffsetMs);
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      const min = String(d.getUTCMinutes()).padStart(2, '0');
+      timeStr = `[${mm}/${dd} ${hh}:${min}] `;
+    }
+    const groupTag = m.groupName ? `【${m.groupName}】` : "";
+    return `${groupTag}${timeStr}${m.senderName}: ${m.text}`;
+  }).join('\n');
+
+  if (conversationLog.length > 30000) {
+    conversationLog = conversationLog.slice(-30000);
+  }
+
+  return { messages, conversationLog };
+}
+
+async function fetchOpenTasks() {
+  try {
+    const [todosRes, jobsRes] = await Promise.all([
+      fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/todos`),
+      fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/jobs`)
+    ]);
+    const [todosData, jobsData] = await Promise.all([todosRes.json(), jobsRes.json()]);
+
+    const formatDocs = (docs, label) => {
+      const items = [];
+      for (const doc of (docs || [])) {
+        const f = doc.fields || {};
+        if (f.completed?.booleanValue === true) continue;
+        const title = f.title?.stringValue || "";
+        if (!title.trim()) continue;
+        const deadline = f.deadline?.stringValue ? `（期限: ${f.deadline.stringValue}）` : "";
+        const desc = f.description?.stringValue ? ` - ${f.description.stringValue}` : "";
+        items.push(`・[${label}] ${title}${deadline}${desc}`);
+      }
+      return items;
+    };
+
+    const all = [
+      ...formatDocs(todosData.documents, "To-Do"),
+      ...formatDocs(jobsData.documents, "求人")
+    ];
+    return all.length > 0 ? all.join('\n') : "（現在未完了のタスク・求人はありません）";
+  } catch {
+    return "（取得できませんでした）";
+  }
+}
+
+async function getChatHistory(targetId) {
+  if (!targetId) return [];
+  try {
+    const res = await fetch(`https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/assistant_chats/${targetId}`);
+    if (!res.ok) return [];
+    const doc = await res.json();
+    const raw = doc.fields?.historyJson?.stringValue;
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveChatHistory(targetId, history) {
+  if (!targetId) return;
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/assistant_chats/${targetId}?updateMask.fieldPaths=historyJson&updateMask.fieldPaths=updatedAt`;
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: {
+          historyJson: { stringValue: JSON.stringify(history) },
+          updatedAt: { timestampValue: new Date().toISOString() }
+        }
+      })
+    });
+  } catch (err) {
+    console.error("Failed to save assistant_chats:", err);
   }
 }
