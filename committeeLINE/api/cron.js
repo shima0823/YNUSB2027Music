@@ -29,11 +29,14 @@ export default async function handler(req, res) {
   try {
     const nowUtc = new Date();
     const jstOffsetMs = 9 * 60 * 60 * 1000;
+    const oneDayMs = 24 * 60 * 60 * 1000;
     const nowJst = new Date(nowUtc.getTime() + jstOffsetMs);
-    const tomorrowJst = new Date(nowUtc.getTime() + jstOffsetMs + (24 * 60 * 60 * 1000));
+    const tomorrowJst = new Date(nowUtc.getTime() + jstOffsetMs + oneDayMs);
+    const dayAfterTomorrowJst = new Date(nowUtc.getTime() + jstOffsetMs + (2 * oneDayMs));
     
     const todayJstStr = nowJst.toISOString().split('T')[0];
     const tomorrowJstStr = tomorrowJst.toISOString().split('T')[0];
+    const dayAfterTomorrowJstStr = dayAfterTomorrowJst.toISOString().split('T')[0];
 
     const collections = ['todos', 'jobs'];
     let remindersSent = 0;
@@ -54,10 +57,13 @@ export default async function handler(req, res) {
           continue;
         }
 
-        const title = fields.title?.stringValue || "無題";
+        const title = fields.title?.stringValue || "";
+        if (!title.trim()) continue;
+
         const deadline = fields.deadline?.stringValue || "";
         const lineTargetId = fields.lineTargetId?.stringValue;
-        const alreadyReminded = fields.remindedAt?.timestampValue || null;
+        const lastRemindedDate = fields.lastRemindedDate?.stringValue || null;
+        const alreadyRemindedToday = lastRemindedDate === todayJstStr;
 
         // 締め切り日（JSTのYYYY-MM-DD）の算出
         let targetDueDateStr = null;
@@ -80,20 +86,38 @@ export default async function handler(req, res) {
           targetDueDateStr = parseDateFallback(deadline, nowJst);
         }
 
+        // リマインドタイミング判定（前々日 / 前日 / 当日）
+        let reminderTiming = null;
+        if (targetDueDateStr === dayAfterTomorrowJstStr) {
+          reminderTiming = '2days_before';
+        } else if (targetDueDateStr === tomorrowJstStr) {
+          reminderTiming = '1day_before';
+        } else if (targetDueDateStr === todayJstStr) {
+          reminderTiming = 'today';
+        }
+
         const logEntry = {
           docId,
           title,
           deadline,
           rawDueDateISO: rawDueDateISO || "",
           targetDueDateStr,
-          tomorrowJstStr,
-          isMatch: targetDueDateStr === tomorrowJstStr,
-          alreadyReminded: !!alreadyReminded
+          reminderTiming,
+          alreadyRemindedToday
         };
 
-        if (targetDueDateStr === tomorrowJstStr && lineTargetId && !alreadyReminded) {
+        if (reminderTiming && lineTargetId && !alreadyRemindedToday) {
           const typeLabel = col === 'todos' ? "To-Do" : "求人";
-          const messageText = `⚠️ 【期限前日リマインド】\n明日は以下の${typeLabel}の期限です！忘れずに対応をお願いします！\n\n「${title}」\n(期限: ${deadline})\n\nダッシュボードで確認: https://ynusb-2027-music.vercel.app/`;
+          let headerText = "";
+          if (reminderTiming === '2days_before') {
+            headerText = `⏰ 【期限2日前リマインド】\n明後日（2日後）は以下の${typeLabel}の期限です！計画的に進めましょう！`;
+          } else if (reminderTiming === '1day_before') {
+            headerText = `⚠️ 【期限前日リマインド】\n明日は以下の${typeLabel}の期限です！忘れずに対応をお願いします！`;
+          } else {
+            headerText = `🚨 【本日が期限！】\n今日が以下の${typeLabel}の締め切り日です！未対応の方は本日中にお願いします！`;
+          }
+
+          const messageText = `${headerText}\n\n「${title}」\n(期限: ${deadline})\n\nダッシュボードで確認: https://ynusb-2027-music.vercel.app/`;
 
           const lineRes = await fetch("https://api.line.me/v2/bot/message/push", {
             method: "POST",
@@ -111,14 +135,15 @@ export default async function handler(req, res) {
             remindersSent++;
             logEntry.sent = true;
 
-            // 二重送信防止用フラグと補正したdueDateISOを保存
-            const patchUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${col}/${docId}?updateMask.fieldPaths=remindedAt&updateMask.fieldPaths=dueDateISO`;
+            // 同日二重送信防止用の日付と補正したdueDateISOを保存
+            const patchUrl = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT_ID}/databases/(default)/documents/${col}/${docId}?updateMask.fieldPaths=remindedAt&updateMask.fieldPaths=lastRemindedDate&updateMask.fieldPaths=dueDateISO`;
             await fetch(patchUrl, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 fields: {
                   remindedAt: { timestampValue: nowUtc.toISOString() },
+                  lastRemindedDate: { stringValue: todayJstStr },
                   dueDateISO: { stringValue: `${targetDueDateStr}T14:59:59Z` }
                 }
               })
@@ -143,13 +168,14 @@ export default async function handler(req, res) {
           executedAtJST: { stringValue: nowJst.toISOString() },
           todayJstStr: { stringValue: todayJstStr },
           tomorrowJstStr: { stringValue: tomorrowJstStr },
+          dayAfterTomorrowJstStr: { stringValue: dayAfterTomorrowJstStr },
           remindersSent: { integerValue: remindersSent.toString() },
           logsJson: { stringValue: JSON.stringify(executionLogs) }
         }
       })
     });
 
-    res.status(200).json({ success: true, todayJstStr, tomorrowJstStr, remindersSent, executionLogs });
+    res.status(200).json({ success: true, todayJstStr, tomorrowJstStr, dayAfterTomorrowJstStr, remindersSent, executionLogs });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message, executionLogs });
